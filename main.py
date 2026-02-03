@@ -107,6 +107,13 @@ def main():
     
     # スプレッドシート名に合わせて変更してください
     sheet = client.open("YouTube分析シート").sheet1
+
+    # B1セルに入力されたキーワードを取得する
+    search_keyword = sheet.acell('B1').value
+    print(f"スプレッドシートから取得したキーワード: {search_keyword}")
+
+    # このキーワードを使って検索ロジックを回す
+    # url = f"https://yutura.net/ranking/?q={search_keyword}" ...のような形
     
     # クリアして上書き（差分計算はシート側の関数でも対応可能）
     sheet.clear()
