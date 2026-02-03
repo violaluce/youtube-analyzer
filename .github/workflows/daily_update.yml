@@ -1,0 +1,30 @@
+name: YouTube Daily Update
+
+on:
+  schedule:
+    # 毎日 日本時間の朝9:00（世界標準時の0:00）に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch: # これを入れると、ボタン一つでいつでも手動実行できます
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 google-api-python-client pandas gspread oauth2client isodate
+
+      - name: Run script
+        env:
+          # GitHubのSecretsに登録した情報を読み込む設定
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GOOGLE_JSON_DATA: ${{ secrets.GOOGLE_JSON_DATA }}
+        run: python main.py
