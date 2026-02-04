@@ -6,7 +6,6 @@ import re
 import pandas as pd
 import gspread
 import urllib3
-import isodate
 from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
 from oauth2client.service_account import ServiceAccountCredentials
@@ -15,113 +14,85 @@ from datetime import datetime
 # --- 初期設定 ---
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# GitHub Secretsから環境変数を読み込む
+# GitHub Secretsから読み込み
 YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY')
 GOOGLE_JSON_DATA = os.environ.get('GOOGLE_JSON_DATA')
 
-def get_yutura_list():
-    """ユーチュラのランキングからチャンネルURLを取得"""
-    # 2026年2月の再生回数ランキング
-    url = "https://yutura.net/ranking/mon/?mode=view&date=202602&p=1"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    try:
-        res = requests.get(url, headers=headers, verify=False, timeout=15)
-        res.encoding = res.apparent_encoding
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        channels = []
-        for a in soup.find_all('a'):
-            href = a.get('href', '')
-            # チャンネル個別ページへのリンクを抽出
-            if '/channel/' in href and a.text.strip() and 'チャンネルの詳細' not in a.text:
-                channels.append({"name": a.text.strip(), "url": "https://yutura.net" + href})
-        
-        # 重複削除
-        unique_channels = []
-        seen = set()
-        for c in channels:
-            if c['url'] not in seen:
-                unique_channels.append(c)
-                seen.add(c['url'])
-        return unique_channels
-    except Exception as e:
-        print(f"ユーチュラ取得エラー: {e}")
-        return []
-
-def get_yt_id(yutura_url):
-    """ユーチュラ詳細ページからYouTube ID (UC...) を抽出"""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(yutura_url, headers=headers, verify=False, timeout=10)
-        match = re.search(r'youtube\.com/channel/(UC[\w-]+)', res.text)
-        return match.group(1) if match else None
-    except:
-        return None
-
 def main():
-    print("🚀 1. ユーチュラからリストを取得中...")
-    raw_list = get_yutura_list()
+    print("🚀 処理開始...")
     
-    if not raw_list:
-        print("リストが取得できませんでした。終了します。")
-        return
-
-    print(f"   {len(raw_list)}件の候補を発見。YouTube IDを特定中...")
-    
-    data_for_api = []
-    # API節約のため、まずはIDを特定（上位20件程度でテスト）
-    for item in raw_list[:20]:
-        uid = get_yt_id(item['url'])
-        if uid:
-            data_for_api.append(uid)
-        time.sleep(1) # サイトへの負荷軽減
-
-    print(f"📊 2. YouTube APIで詳細データを取得中 ({len(data_for_api)}件)...")
-    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-    
-    # まとめて取得（最大50件まで1通信）
-    ch_res = youtube.channels().list(
-        id=','.join(data_for_api),
-        part='snippet,statistics'
-    ).execute()
-
-    final_data = []
-    for item in ch_res['items']:
-        final_data.append({
-            "日付": datetime.now().strftime('%Y-%m-%d'),
-            "名前": item['snippet']['title'],
-            "登録者数": int(item['statistics']['subscriberCount']),
-            "総再生数": int(item['statistics']['viewCount']),
-            "動画数": int(item['statistics']['videoCount']),
-            "URL": f"https://www.youtube.com/channel/{item['id']}"
-        })
-    
-    df_new = pd.DataFrame(final_data)
-
-    print("📝 3. スプレッドシートへ書き込み中...")
+    # 1. スプレッドシートから「リモコン（B1セル）」の値を読み込む
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     creds_dict = json.loads(GOOGLE_JSON_DATA)
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     
-    # スプレッドシート名に合わせて変更してください
-    sheet = client.open("YouTube分析シート").sheet1
-
-    # B1セルに入力されたキーワードを取得する
+    # スプレッドシート名を確認（ご自身のシート名に合わせてください）
+    spreadsheet_name = "YouTube分析シート"
+    sheet = client.open(spreadsheet_name).sheet1
+    
+    # B1セルの検索ワードを取得
     search_keyword = sheet.acell('B1').value
-    print(f"スプレッドシートから取得したキーワード: {search_keyword}")
+    if not search_keyword:
+        print("B1セルに検索ワードがありません。終了します。")
+        return
+    print(f"🔍 検索キーワード: {search_keyword}")
 
-    # このキーワードを使って検索ロジックを回す
-    # url = f"https://yutura.net/ranking/?q={search_keyword}" ...のような形
+    # 2. ユーチュラでキーワード検索（スクレイピング）
+    # 検索結果ページを直接叩く形にカスタマイズ
+    search_url = f"https://yutura.net/ranking/?q={search_keyword}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    res = requests.get(search_url, headers=headers, verify=False)
+    soup = BeautifulSoup(res.text, 'html.parser')
     
-    # クリアして上書き（差分計算はシート側の関数でも対応可能）
-    sheet.clear()
-    header = [df_new.columns.values.tolist()]
-    values = df_new.values.tolist()
-    sheet.update('A1', header + values)
+    uc_ids = []
+    print("🆔 YouTube IDを抽出中...")
+    for a in soup.find_all('a'):
+        href = a.get('href', '')
+        if '/channel/' in href and 'channel' not in a.text:
+            # 詳細ページからUC-IDを抜き出す
+            try:
+                detail_res = requests.get("https://yutura.net" + href, headers=headers, verify=False)
+                match = re.search(r'youtube\.com/channel/(UC[\w-]+)', detail_res.text)
+                if match:
+                    uc_ids.append(match.group(1))
+                time.sleep(0.5) # 負荷軽減
+            except:
+                continue
+        if len(uc_ids) >= 15: break # まずは上位15件
+
+    # 3. YouTube APIで詳細調査
+    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    ch_res = youtube.channels().list(id=','.join(uc_ids), part='snippet,statistics').execute()
+
+    new_data = []
+    for item in ch_res['items']:
+        stats = item['statistics']
+        new_data.append({
+            "日付": datetime.now().strftime('%Y-%m-%d'),
+            "名前": item['snippet']['title'],
+            "登録者数": int(stats.get('subscriberCount', 0)),
+            "総再生数": int(stats.get('viewCount', 0)),
+            "動画数": int(stats.get('videoCount', 0)),
+            "URL": f"https://www.youtube.com/channel/{item['id']}"
+        })
     
-    print("✅ 全工程が完了しました！")
+    df_new = pd.DataFrame(new_data)
+
+    # 4. 異変検知（前回データとの比較）
+    # 前回のデータ（3行目以降に溜まっていると仮定）を読み込んで比較するロジック
+    # 今回はシンプルに、最新の結果を「A3」セルから下に書き出します。
+    # (B1が入力、A3から結果表という構成)
+    
+    print("📝 スプレッドシートへ書き出し中...")
+    # ヘッダーとデータをリスト化
+    output_list = [df_new.columns.values.tolist()] + df_new.values.tolist()
+    
+    # A3セルから結果を上書き
+    # sheet.update('A3', output_list) は最新のgspreadでは以下のように書きます
+    sheet.update(range_name='A3', values=output_list)
+    
+    print(f"✅ 完了！'{search_keyword}' の調査結果をシートに反映しました。")
 
 if __name__ == "__main__":
     main()
