@@ -61,14 +61,27 @@ def main():
                 continue
         if len(uc_ids) >= 15: break # まずは上位15件
 
-    # 3. YouTube APIで詳細調査
-    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-    ch_res = youtube.channels().list(id=','.join(uc_ids), part='snippet,statistics').execute()
+    # --- 3. YouTube APIで詳細調査 ---
+    if not uc_ids:
+        print("❌ YouTube IDが1つも見つかりませんでした。B1セルのキーワードを変えてみてください。")
+        return # IDがない場合はここで安全に終了させる
 
-    new_data = []
-    for item in ch_res['items']:
-        stats = item['statistics']
-        new_data.append({
+    print(f"📊 2. YouTube APIで詳細データを取得中 ({len(uc_ids)}件)...")
+    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    
+    try:
+        ch_res = youtube.channels().list(id=','.join(uc_ids), part='snippet,statistics').execute()
+        
+        # APIの返却結果に 'items' があるか確認
+        if 'items' not in ch_res or not ch_res['items']:
+            print("⚠️ APIから有効なデータが返ってきませんでした。")
+            return
+
+        new_data = []
+        for item in ch_res['items']:
+            # ...（以下、データの整理と書き出し処理）
+            stats = item['statistics']
+            new_data.append({
             "日付": datetime.now().strftime('%Y-%m-%d'),
             "名前": item['snippet']['title'],
             "登録者数": int(stats.get('subscriberCount', 0)),
